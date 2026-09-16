@@ -1,3 +1,22 @@
+# rt-control 补丁分支说明
+
+本仓库 fork 自 [ros-controls/ros2_controllers](https://github.com/ros-controls/ros2_controllers)，
+供 [SevenovaHangzhou/robot_driver](https://github.com/SevenovaHangzhou/robot_driver)
+（拆码垛机器人 RT-Control 实时控制域）使用，由其 `deps.repos` 按 SHA 锁定本仓库 `rt-control` 分支。
+
+`rt-control` 分支 = 上游 `humble` 基线 `cbcf6621` + 以下补丁（按序，每补丁一个 commit）：
+
+| # | 补丁 | 改动说明 |
+| --- | --- | --- |
+| 0001 | jtc-start-consistency | JointTrajectoryController 启动一致性：接受轨迹前校验起点与当前实际状态一致（新增参数控制阈值/行为） |
+| 0002 | use-contract-qos-profiles | diff_drive_controller 与 joint_state_broadcaster 的发布器改用 robot_interfaces_qos 契约 QoS 配置 |
+| 0003 | opt-in-pp-gripper-commands | gripper_action_controller 增加可选的 PP（Profile Position）命令模式，用于 ZeroErr PP 夹爪 |
+
+**升级方式**：fetch 上游并快进本仓库 `humble` 分支 → 将 `rt-control` rebase 到新基线 →
+按 robot_driver 测试体系重新验证 → 更新 robot_driver 的 `deps.repos` 锁定 SHA。
+
+---
+
 # ros2_controllers
 
 [![Licence](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
