@@ -1,4 +1,9 @@
 gripper_action_controller:
+  pp:
+    enabled: {type: bool, default_value: false}
+    min_position: {type: double, default_value: 0.0}
+    max_position: {type: double, default_value: 0.0}
+    command_timeout: {type: double, default_value: 0.0}
   action_monitor_rate: {
     type: double,
     default_value: 20.0,

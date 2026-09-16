@@ -19,6 +19,12 @@
 
 // C++ standard
 #include <cassert>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cmath>
+#include <cstdint>
+#include <mutex>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -68,6 +74,8 @@ public:
   {
     double position_;    // Last commanded position
     double max_effort_;  // Max allowed effort
+    uint64_t sequence_{0};
+    bool halt_{false};
   };
 
   GRIPPER_ACTION_CONTROLLER_PUBLIC GripperActionController();
@@ -161,6 +169,19 @@ protected:
 
   rclcpp::Time last_movement_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);  ///< Store stall time
   double computed_command_;                                             ///< Computed command
+
+  // Opt-in acknowledged PP transport. Action handles are retired by the non-RT timer.
+  std::array<hardware_interface::LoanedCommandInterface *, 3> pp_commands_{};
+  std::array<hardware_interface::LoanedStateInterface *, 3> pp_states_{};
+  std::atomic_bool pp_active_{false}, pp_ready_{false}, pp_busy_{false};
+  std::atomic_int pp_result_code_{0};
+  std::atomic<double> pp_position_{0.0}, pp_effort_{0.0};
+  std::mutex pp_lifecycle_mutex_;
+  std::optional<rclcpp_action::GoalUUID> pp_pending_goal_;
+  uint64_t pp_sequence_{0}, pp_rt_sequence_{0}, pp_terminal_sequence_{0};
+  double pp_elapsed_{0.0}, pp_stalled_{0.0};
+  bool pp_stopping_{false};
+  controller_interface::return_type update_pp(const rclcpp::Duration & period);
 
   /**
    * \brief Check for success and publish appropriate result and feedback.
