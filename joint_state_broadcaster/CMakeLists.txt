@@ -12,6 +12,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   generate_parameter_library
   pluginlib
   rclcpp_lifecycle
+  robot_interfaces_qos
   rcutils
   realtime_tools
   sensor_msgs

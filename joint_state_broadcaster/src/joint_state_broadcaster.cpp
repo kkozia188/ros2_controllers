@@ -29,6 +29,7 @@
 #include "rclcpp/time.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "rcpputils/split.hpp"
+#include "robot_interfaces_qos/profiles.hpp"
 #include "rcutils/logging_macros.h"
 #include "std_msgs/msg/header.hpp"
 
@@ -149,7 +150,7 @@ controller_interface::CallbackReturn JointStateBroadcaster::on_configure(
     const std::string topic_name_prefix = params_.use_local_topics ? "~/" : "";
 
     joint_state_publisher_ = get_node()->create_publisher<sensor_msgs::msg::JointState>(
-      topic_name_prefix + "joint_states", rclcpp::SystemDefaultsQoS());
+      topic_name_prefix + "joint_states", robot_interfaces_qos::fast_state());
 
     realtime_joint_state_publisher_ =
       std::make_shared<realtime_tools::RealtimePublisher<sensor_msgs::msg::JointState>>(

@@ -26,6 +26,7 @@
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include "rclcpp/logging.hpp"
+#include "robot_interfaces_qos/profiles.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 
 namespace
@@ -343,7 +344,7 @@ controller_interface::CallbackReturn DiffDriveController::on_configure(
   if (use_stamped_vel_)
   {
     velocity_command_subscriber_ = get_node()->create_subscription<Twist>(
-      DEFAULT_COMMAND_TOPIC, rclcpp::SystemDefaultsQoS(),
+      DEFAULT_COMMAND_TOPIC, robot_interfaces_qos::control(),
       [this](const std::shared_ptr<Twist> msg) -> void
       {
         if (!subscriber_is_active_)
@@ -367,7 +368,7 @@ controller_interface::CallbackReturn DiffDriveController::on_configure(
   {
     velocity_command_unstamped_subscriber_ =
       get_node()->create_subscription<geometry_msgs::msg::Twist>(
-        DEFAULT_COMMAND_UNSTAMPED_TOPIC, rclcpp::SystemDefaultsQoS(),
+        DEFAULT_COMMAND_UNSTAMPED_TOPIC, robot_interfaces_qos::control(),
         [this](const std::shared_ptr<geometry_msgs::msg::Twist> msg) -> void
         {
           if (!subscriber_is_active_)
@@ -387,7 +388,7 @@ controller_interface::CallbackReturn DiffDriveController::on_configure(
 
   // initialize odometry publisher and message
   odometry_publisher_ = get_node()->create_publisher<nav_msgs::msg::Odometry>(
-    DEFAULT_ODOMETRY_TOPIC, rclcpp::SystemDefaultsQoS());
+    DEFAULT_ODOMETRY_TOPIC, robot_interfaces_qos::fast_state());
   realtime_odometry_publisher_ =
     std::make_shared<realtime_tools::RealtimePublisher<nav_msgs::msg::Odometry>>(
       odometry_publisher_);

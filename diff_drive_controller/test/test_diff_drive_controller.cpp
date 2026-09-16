@@ -26,6 +26,7 @@
 #include "hardware_interface/loaned_state_interface.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
+#include "robot_interfaces_qos/profiles.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 using CallbackReturn = controller_interface::CallbackReturn;
@@ -93,7 +94,7 @@ protected:
 
     pub_node = std::make_shared<rclcpp::Node>("velocity_publisher");
     velocity_publisher = pub_node->create_publisher<geometry_msgs::msg::TwistStamped>(
-      controller_name + "/cmd_vel", rclcpp::SystemDefaultsQoS());
+      controller_name + "/cmd_vel", robot_interfaces_qos::control());
   }
 
   void TearDown() override
