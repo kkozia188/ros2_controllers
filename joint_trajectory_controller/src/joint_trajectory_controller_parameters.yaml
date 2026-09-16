@@ -108,6 +108,34 @@ joint_trajectory_controller:
      ``cmd_timeout`` must be greater than ``constraints.goal_time``, otherwise ignored.
      If zero, timeout is deactivated",
   }
+  trajectory_start_consistency_check:
+    enabled: {
+      type: bool,
+      default_value: false,
+      description: "Reject FJT goals whose first point is inconsistent with a fresh state snapshot.",
+      read_only: true,
+    }
+    position_tolerances: {
+      type: double_array,
+      default_value: [],
+      description: "Maximum absolute first-point position error for each configured joint.",
+      read_only: true,
+    }
+    feedback_age_state_interface: {
+      type: string,
+      default_value: "",
+      description: "Full name of the scalar feedback-age state interface.",
+      read_only: true,
+    }
+    max_feedback_age_ms: {
+      type: double,
+      default_value: 500.0,
+      description: "Maximum accepted feedback age in milliseconds.",
+      read_only: true,
+      validation: {
+        gt_eq<>: [0.0]
+      }
+    }
   gains:
     __map_joints:
       p: {

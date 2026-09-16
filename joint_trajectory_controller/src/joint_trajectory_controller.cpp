@@ -111,6 +111,11 @@ JointTrajectoryController::state_interface_configuration() const
       conf.names.push_back(joint_name + "/" + interface_type);
     }
   }
+  if (params_.trajectory_start_consistency_check.enabled)
+  {
+    conf.names.push_back(
+      params_.trajectory_start_consistency_check.feedback_age_state_interface);
+  }
   return conf;
 }
 
@@ -194,6 +199,19 @@ controller_interface::return_type JointTrajectoryController::update(
   state_current_.time_from_start.sec = 0;
   state_current_.time_from_start.nanosec = 0;
   read_state_from_state_interfaces(state_current_);
+  if (params_.trajectory_start_consistency_check.enabled)
+  {
+    admission_snapshot_sequence_.fetch_add(1U, std::memory_order_acq_rel);
+    for (size_t index = 0; index < dof_; ++index)
+    {
+      admission_position_snapshot_[index].store(
+        state_current_.positions[index], std::memory_order_relaxed);
+    }
+    admission_feedback_age_ms_.store(
+      state_interfaces_[feedback_age_state_interface_index_].get_value(),
+      std::memory_order_relaxed);
+    admission_snapshot_sequence_.fetch_add(1U, std::memory_order_release);
+  }
 
   // currently carrying out a trajectory
   if (has_active_trajectory())
@@ -673,6 +691,50 @@ controller_interface::CallbackReturn JointTrajectoryController::on_configure(
   // get degrees of freedom
   dof_ = params_.joints.size();
 
+  if (params_.trajectory_start_consistency_check.enabled)
+  {
+    if (params_.trajectory_start_consistency_check.feedback_age_state_interface.empty())
+    {
+      RCLCPP_ERROR(
+        logger,
+        "trajectory_start_consistency_check.feedback_age_state_interface must not be empty");
+      return CallbackReturn::FAILURE;
+    }
+    const auto & position_tolerances =
+      params_.trajectory_start_consistency_check.position_tolerances;
+    if (position_tolerances.size() != dof_)
+    {
+      RCLCPP_ERROR(
+        logger,
+        "trajectory_start_consistency_check.position_tolerances must contain one value "
+        "per configured joint (expected %zu, got %zu)",
+        dof_, position_tolerances.size());
+      return CallbackReturn::FAILURE;
+    }
+    if (std::any_of(
+        position_tolerances.begin(), position_tolerances.end(),
+        [](double tolerance) { return !std::isfinite(tolerance) || tolerance < 0.0; }))
+    {
+      RCLCPP_ERROR(
+        logger,
+        "trajectory_start_consistency_check.position_tolerances must be finite and nonnegative");
+      return CallbackReturn::FAILURE;
+    }
+    admission_position_snapshot_ = std::make_unique<std::atomic<double>[]>(dof_);
+    for (size_t index = 0; index < dof_; ++index)
+    {
+      admission_position_snapshot_[index].store(
+        std::numeric_limits<double>::quiet_NaN(), std::memory_order_relaxed);
+    }
+    admission_feedback_age_ms_.store(
+      std::numeric_limits<double>::quiet_NaN(), std::memory_order_relaxed);
+    admission_snapshot_sequence_.store(0U, std::memory_order_release);
+  }
+  else
+  {
+    admission_position_snapshot_.reset();
+  }
+
   // TODO(destogl): why is this here? Add comment or move
   if (!reset())
   {
@@ -993,6 +1055,25 @@ controller_interface::CallbackReturn JointTrajectoryController::on_activate(
       return CallbackReturn::ERROR;
     }
   }
+  if (params_.trajectory_start_consistency_check.enabled)
+  {
+    const auto interface_name =
+      params_.trajectory_start_consistency_check.feedback_age_state_interface;
+    const auto interface_it = std::find_if(
+      state_interfaces_.begin(), state_interfaces_.end(),
+      [&interface_name](const auto & state_interface)
+      { return state_interface.get_name() == interface_name; });
+    if (interface_it == state_interfaces_.end())
+    {
+      RCLCPP_ERROR(
+        logger, "Expected trajectory-admission state interface '%s'.",
+        interface_name.c_str());
+      return CallbackReturn::ERROR;
+    }
+    feedback_age_state_interface_index_ =
+      static_cast<size_t>(std::distance(state_interfaces_.begin(), interface_it));
+    has_feedback_age_state_interface_.store(true, std::memory_order_release);
+  }
 
   traj_external_point_ptr_ = std::make_shared<Trajectory>();
   traj_msg_external_point_ptr_.writeFromNonRT(
@@ -1055,6 +1136,9 @@ controller_interface::CallbackReturn JointTrajectoryController::on_activate(
 controller_interface::CallbackReturn JointTrajectoryController::on_deactivate(
   const rclcpp_lifecycle::State &)
 {
+  has_feedback_age_state_interface_.store(false, std::memory_order_release);
+  admission_feedback_age_ms_.store(
+    std::numeric_limits<double>::quiet_NaN(), std::memory_order_release);
   const auto active_goal = *rt_active_goal_.readFromNonRT();
   if (active_goal)
   {
@@ -1266,8 +1350,113 @@ rclcpp_action::GoalResponse JointTrajectoryController::goal_received_callback(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
+  if (!validate_trajectory_start(goal->trajectory))
+  {
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
   RCLCPP_INFO(get_node()->get_logger(), "Accepted new action goal");
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+bool JointTrajectoryController::validate_trajectory_start(
+  const trajectory_msgs::msg::JointTrajectory & trajectory) const
+{
+  if (!params_.trajectory_start_consistency_check.enabled)
+  {
+    return true;
+  }
+
+  if (
+    !has_feedback_age_state_interface_.load(std::memory_order_acquire) ||
+    !admission_position_snapshot_)
+  {
+    RCLCPP_ERROR(
+      get_node()->get_logger(),
+      "FJT_REJECT reason=feedback_snapshot_unavailable feedback_age_ms=nan");
+    return false;
+  }
+
+  std::vector<double> actual_positions(dof_);
+  double feedback_age_ms = std::numeric_limits<double>::quiet_NaN();
+  bool snapshot_copied = false;
+  for (size_t attempt = 0; attempt < 1000U; ++attempt)
+  {
+    const uint64_t sequence_before =
+      admission_snapshot_sequence_.load(std::memory_order_acquire);
+    if ((sequence_before & 1U) != 0U)
+    {
+      continue;
+    }
+    feedback_age_ms = admission_feedback_age_ms_.load(std::memory_order_relaxed);
+    for (size_t index = 0; index < dof_; ++index)
+    {
+      actual_positions[index] =
+        admission_position_snapshot_[index].load(std::memory_order_relaxed);
+    }
+    const uint64_t sequence_after =
+      admission_snapshot_sequence_.load(std::memory_order_acquire);
+    if (sequence_before == sequence_after && (sequence_after & 1U) == 0U)
+    {
+      snapshot_copied = true;
+      break;
+    }
+  }
+  if (!snapshot_copied)
+  {
+    RCLCPP_ERROR(
+      get_node()->get_logger(),
+      "FJT_REJECT reason=feedback_snapshot_unavailable feedback_age_ms=nan");
+    return false;
+  }
+
+  if (
+    !std::isfinite(feedback_age_ms) ||
+    feedback_age_ms > params_.trajectory_start_consistency_check.max_feedback_age_ms)
+  {
+    RCLCPP_ERROR(
+      get_node()->get_logger(),
+      "FJT_REJECT reason=stale_feedback feedback_age_ms=%.17g max_feedback_age_ms=%.17g",
+      feedback_age_ms,
+      params_.trajectory_start_consistency_check.max_feedback_age_ms);
+    return false;
+  }
+
+  const auto & first_point = trajectory.points.front();
+  for (size_t joint_index = 0; joint_index < dof_; ++joint_index)
+  {
+    const auto goal_joint = std::find(
+      trajectory.joint_names.begin(), trajectory.joint_names.end(), params_.joints[joint_index]);
+    if (goal_joint == trajectory.joint_names.end())
+    {
+      RCLCPP_ERROR(
+        get_node()->get_logger(),
+        "FJT_REJECT reason=missing_joint joint=%s feedback_age_ms=%.17g",
+        params_.joints[joint_index].c_str(), feedback_age_ms);
+      return false;
+    }
+
+    const size_t goal_index =
+      static_cast<size_t>(std::distance(trajectory.joint_names.begin(), goal_joint));
+    const double actual_position = actual_positions[joint_index];
+    const double first_position = first_point.positions[goal_index];
+    const double absolute_error = std::abs(first_position - actual_position);
+    const double position_tolerance =
+      params_.trajectory_start_consistency_check.position_tolerances[joint_index];
+    if (
+      !std::isfinite(actual_position) || !std::isfinite(first_position) ||
+      absolute_error > position_tolerance)
+    {
+      RCLCPP_ERROR(
+        get_node()->get_logger(),
+        "FJT_REJECT reason=start_position_mismatch joint=%s first_position=%.17g "
+        "actual_position=%.17g absolute_error=%.17g limit=%.17g feedback_age_ms=%.17g",
+        params_.joints[joint_index].c_str(), first_position, actual_position, absolute_error,
+        position_tolerance, feedback_age_ms);
+      return false;
+    }
+  }
+  return true;
 }
 
 rclcpp_action::CancelResponse JointTrajectoryController::goal_cancelled_callback(

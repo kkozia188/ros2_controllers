@@ -18,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>  // for std::reference_wrapper
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -131,6 +132,12 @@ protected:
 
   InterfaceReferences<hardware_interface::LoanedCommandInterface> joint_command_interface_;
   InterfaceReferences<hardware_interface::LoanedStateInterface> joint_state_interface_;
+
+  std::unique_ptr<std::atomic<double>[]> admission_position_snapshot_;
+  std::atomic<double> admission_feedback_age_ms_{std::numeric_limits<double>::quiet_NaN()};
+  std::atomic<uint64_t> admission_snapshot_sequence_{0U};
+  size_t feedback_age_state_interface_index_{0U};
+  std::atomic<bool> has_feedback_age_state_interface_{false};
 
   bool has_position_state_interface_ = false;
   bool has_velocity_state_interface_ = false;
@@ -267,6 +274,9 @@ protected:
    */
   bool read_state_from_command_interfaces(JointTrajectoryPoint & state);
   bool read_commands_from_command_interfaces(JointTrajectoryPoint & commands);
+
+  bool validate_trajectory_start(
+    const trajectory_msgs::msg::JointTrajectory & trajectory) const;
 
   void query_state_service(
     const std::shared_ptr<control_msgs::srv::QueryTrajectoryState::Request> request,
